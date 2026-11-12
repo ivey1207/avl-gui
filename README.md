@@ -91,8 +91,8 @@ Prerequisites: Python 3.10+
    ```
    Backend will be running at / Бэкенд запустится на: [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
-> **Note**: Modify `AVL_BIN` and `AVL_EXAMPLES_DIR` in `backend/main.py` if your paths differ.
-> **Примечание**: Измените пути `AVL_BIN` и `AVL_EXAMPLES_DIR` в файле `backend/main.py` при необходимости.
+> **Note**: The backend finds `avl` on your `PATH` and uses the repo's `examples/` folder. Override with the `AVL_BIN` / `AVL_EXAMPLES_DIR` environment variables if needed.
+> **Примечание**: Бэкенд сам находит `avl` в `PATH` и использует папку `examples/` из репозитория. Другие пути можно задать переменными окружения `AVL_BIN` / `AVL_EXAMPLES_DIR`.
 
 ---
 
@@ -113,6 +113,24 @@ Prerequisites: Node.js (v18+)
    npm run dev
    ```
    Frontend will be running at / Фронтенд запустится на: [http://localhost:5173/](http://localhost:5173/)
+
+   The dev server proxies `/api` to the backend on `127.0.0.1:8000`.
+   Dev-сервер проксирует `/api` на бэкенд `127.0.0.1:8000`.
+
+---
+
+### 4. Deploy to a server / Деплой на сервер (Ubuntu)
+
+One command from your Mac builds the frontend, uploads the project to `/opt/avl-gui`, compiles AVL on the server, and sets up the backend (systemd) and nginx on port 80.
+Одна команда с Mac собирает фронтенд, загружает проект в `/opt/avl-gui`, компилирует AVL на сервере и настраивает бэкенд (systemd) и nginx на порту 80.
+
+```bash
+ssh-copy-id root@SERVER_IP        # once / один раз
+./deploy/deploy.sh root@SERVER_IP # every deploy / при каждом деплое
+```
+
+Files / Файлы: `deploy/setup-server.sh` (runs on the server), `deploy/avl-gui.service`, `deploy/nginx-avl-gui.conf`.
+Logs / Логи: `ssh root@SERVER_IP journalctl -u avl-gui -f`
 
 ---
 

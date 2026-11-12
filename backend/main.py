@@ -11,8 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ── Configuration ─────────────────────────────────────────
-AVL_BIN = "/opt/homebrew/bin/avl"
-AVL_EXAMPLES_DIR = os.path.expanduser("~/Desktop/AVL_Examples")
+# Override with env vars AVL_BIN / AVL_EXAMPLES_DIR if needed.
+AVL_BIN = os.environ.get("AVL_BIN") or shutil.which("avl") or "/opt/homebrew/bin/avl"
+AVL_EXAMPLES_DIR = os.environ.get("AVL_EXAMPLES_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples"))
 
 app = FastAPI(title="AVL GUI Backend")
 
@@ -24,9 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-from typing import List, Dict, Any, Optional
-
 # ── Models ────────────────────────────────────────────────
 
 class RunRequest(BaseModel):
@@ -35,7 +34,7 @@ class RunRequest(BaseModel):
     beta: float = 0.0
     xref_override: Optional[float] = None
     controls: Dict[str, float] = {}
-    trim_mode: str = "none" # "none" or "alpha"
+    trim_mode: str = "none"  # "none" or "alpha"
 
 class PolarRequest(BaseModel):
     avl_content: str
@@ -45,11 +44,22 @@ class PolarRequest(BaseModel):
     xref_override: Optional[float] = None
     controls: Dict[str, float] = {}
 
+class RunCase(BaseModel):
+    label: str
+    alpha: float = 0.0
+    beta: float = 0.0
+    controls: Dict[str, float] = {}
+    trim_mode: str = "none"
+
+class MultiCaseRequest(BaseModel):
+    avl_content: str
+    cases: List[RunCase]
+    xref_override: Optional[float] = None
+
 
 # ── AVL File Parser ──────────────────────────────────────
 
 def parse_avl_file(text: str) -> Dict[str, Any]:
-    """Parse a .avl file into a structured dictionary."""
     lines = text.splitlines()
     result = {
         "name": "",
@@ -61,7 +71,6 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
         "surfaces": [],
     }
 
-    # Strip comments and blank lines for header parsing
     clean = []
     for line in lines:
         stripped = line.strip()
@@ -73,14 +82,11 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
         return result
 
     idx = 0
-    # Line 0: name
     result["name"] = clean[idx]; idx += 1
-    # Line 1: Mach
     try:
         result["mach"] = float(clean[idx]); idx += 1
     except ValueError:
         idx += 1
-    # Line 2: iYsym iZsym Zsym
     try:
         parts = clean[idx].split()
         result["iYsym"] = int(parts[0])
@@ -89,7 +95,6 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
         idx += 1
     except (ValueError, IndexError):
         idx += 1
-    # Line 3: Sref Cref Bref
     try:
         parts = clean[idx].split()
         result["Sref"] = float(parts[0])
@@ -98,7 +103,6 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
         idx += 1
     except (ValueError, IndexError):
         idx += 1
-    # Line 4: Xref Yref Zref
     try:
         parts = clean[idx].split()
         result["Xref"] = float(parts[0])
@@ -108,7 +112,6 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
     except (ValueError, IndexError):
         idx += 1
 
-    # Now parse full lines for SURFACE/SECTION keywords
     i = 0
     current_surface = None
     current_section = None
@@ -118,20 +121,16 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
         upper = line.upper()
 
         if upper == 'SURFACE':
-            # Save previous
             if current_section and current_surface:
                 current_surface["sections"].append(current_section)
             if current_surface:
                 result["surfaces"].append(current_surface)
             current_section = None
-
             i += 1
             surf_name = lines[i].strip() if i < len(lines) else "Unknown"
             i += 1
-            # skip comment lines
             while i < len(lines) and (lines[i].strip().startswith('#') or lines[i].strip().startswith('!')):
                 i += 1
-            # Nchord Cspace [Nspan Sspace]
             nchord, cspace, nspan, sspace = 12, 1.0, 20, 1.0
             if i < len(lines):
                 parts = lines[i].strip().split()
@@ -144,17 +143,10 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
                 except (ValueError, IndexError):
                     pass
                 i += 1
-
             current_surface = {
-                "name": surf_name,
-                "nchord": nchord,
-                "cspace": cspace,
-                "nspan": nspan,
-                "sspace": sspace,
-                "yduplicate": None,
-                "angle": None,
-                "translate": None,
-                "sections": [],
+                "name": surf_name, "nchord": nchord, "cspace": cspace,
+                "nspan": nspan, "sspace": sspace, "yduplicate": None,
+                "angle": None, "translate": None, "sections": [],
             }
             continue
 
@@ -193,10 +185,8 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
             if current_section:
                 current_surface["sections"].append(current_section)
             i += 1
-            # skip comment lines
             while i < len(lines) and (lines[i].strip().startswith('#') or lines[i].strip().startswith('!')):
                 i += 1
-            # Xle Yle Zle Chord Ainc [Nspan Sspace]
             sec = {"Xle": 0, "Yle": 0, "Zle": 0, "Chord": 0, "Ainc": 0,
                    "Nspan": 0, "Sspace": 0, "afile": None, "controls": [], "claf": None}
             if i < len(lines):
@@ -255,13 +245,11 @@ def parse_avl_file(text: str) -> Dict[str, Any]:
 
         i += 1
 
-    # Save last section/surface
     if current_section and current_surface:
         current_surface["sections"].append(current_section)
     if current_surface:
         result["surfaces"].append(current_surface)
 
-    # Extract unique controls in order of appearance
     all_controls = []
     seen = set()
     for surf in result["surfaces"]:
@@ -282,7 +270,6 @@ def override_xref(content: str, new_xref: float) -> str:
     for i, line in enumerate(lines):
         if line.strip() and not line.strip().startswith('#') and not line.strip().startswith('!'):
             clean_lines.append(i)
-    
     if len(clean_lines) >= 5:
         idx = clean_lines[4]
         parts = lines[idx].split()
@@ -291,137 +278,111 @@ def override_xref(content: str, new_xref: float) -> str:
     return "\n".join(lines)
 
 
-# ── AVL Runner ───────────────────────────────────────────
+# ── Strip Forces Parser ───────────────────────────────────
 
-def _run_avl(req: RunRequest) -> str:
-    work_dir = AVL_EXAMPLES_DIR
-    req_id = str(uuid.uuid4())[:8]
-    model_filename = f"_gui_model_{req_id}.avl"
-    st_filename = f"_gui_st_{req_id}.txt"
-    model_path = os.path.join(work_dir, model_filename)
-    st_path = os.path.join(work_dir, st_filename)
-    
-    content = req.avl_content
-    if req.xref_override is not None:
-        content = override_xref(content, req.xref_override)
+def _parse_strip_forces(text: str) -> List[Dict]:
+    """Parse AVL 'fs' strip forces output. Returns list of surfaces with strip data."""
+    surfaces = []
+    current_surface = None
+    header_found = False
 
-    try:
-        with open(model_path, "w") as f:
-            f.write(content)
+    for line in text.splitlines():
+        # Detect surface header: "Surface #  1     Wing"
+        m = re.match(r'\s*Surface\s+#\s*(\d+)\s+(.*)', line)
+        if m:
+            if current_surface:
+                surfaces.append(current_surface)
+            current_surface = {
+                "surface_num": int(m.group(1)),
+                "name": m.group(2).strip(),
+                "strips": []
+            }
+            header_found = False
+            continue
 
-        parsed = parse_avl_file(content)
-        controls_list = parsed.get("controls", [])
+        if current_surface is None:
+            continue
 
-        cmds = [f"load {model_filename}", "oper"]
-        
-        # Apply trim mode or alpha
-        if req.trim_mode == "alpha":
-            cmds.extend(["a", "pm", "0"])
-        else:
-            cmds.append(f"a a {req.alpha}")
+        # Detect the column header row
+        if 'Yle' in line and ('Chord' in line or 'cl' in line):
+            header_found = True
+            continue
 
-        # Set Beta
-        cmds.append(f"b b {req.beta}")
+        if header_found and line.strip():
+            parts = line.split()
+            # Strip data lines start with an integer index
+            if len(parts) >= 8:
+                try:
+                    j = int(parts[0])
+                    strip = {
+                        "j":      j,
+                        "Yle":    float(parts[1]),
+                        "Chord":  float(parts[2]),
+                        "Area":   float(parts[3]),
+                        "c_cl":   float(parts[4]),
+                        "ai":     float(parts[5]),
+                        "cl_norm": float(parts[6]),
+                        "cl":     float(parts[7]),
+                        "cd":     float(parts[8]) if len(parts) > 8 else 0.0,
+                        "cdv":    float(parts[9]) if len(parts) > 9 else 0.0,
+                        "cm_c4":  float(parts[10]) if len(parts) > 10 else 0.0,
+                        "cm_LE":  float(parts[11]) if len(parts) > 11 else 0.0,
+                        "CPxc":   float(parts[12]) if len(parts) > 12 else 0.25,
+                    }
+                    current_surface["strips"].append(strip)
+                except (ValueError, IndexError):
+                    pass
 
-        # Apply control deflections
-        for ctrl_name, val in req.controls.items():
-            if ctrl_name in controls_list:
-                idx = controls_list.index(ctrl_name) + 1
-                cmds.extend([f"d{idx}", f"d{idx}", str(val)])
+    if current_surface:
+        surfaces.append(current_surface)
 
-        cmds.extend([
-            "x",
-            "st",
-            st_filename,
-            "",
-            "",
-            "quit",
-        ])
-        cmd = "\n".join(cmds) + "\n"
-        
-        max_attempts = 10
-        proc = None
-        for attempt in range(1, max_attempts + 1):
-            proc = subprocess.run(
-                [AVL_BIN],
-                input=cmd,
-                text=True,
-                cwd=work_dir,
-                capture_output=True,
-                timeout=30,
-            )
-            if proc.returncode == 0:
-                break
-            elif proc.returncode in (-6, 134) or "syscall to map cache" in proc.stderr:
-                time.sleep(0.05)
-            else:
-                break
-                
-        if os.path.exists(st_path):
-            with open(st_path) as f:
-                return f.read()
-        return proc.stdout if proc else ""
-    finally:
-        if os.path.exists(model_path):
-            os.remove(model_path)
-        if os.path.exists(st_path):
-            os.remove(st_path)
+    return surfaces
 
+
+# ── Hinge Moments Parser ──────────────────────────────────
+
+def _parse_hinge_moments(text: str) -> List[Dict]:
+    """Parse AVL 'hm' hinge moments output."""
+    moments = []
+    for line in text.splitlines():
+        # Lines like: "  elevator        Hinge =  -0.00123"
+        m = re.match(r'\s*(\S+)\s+Hinge\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)', line)
+        if m:
+            moments.append({
+                "surface": m.group(1),
+                "hinge_moment": float(m.group(2))
+            })
+    return moments
+
+
+# ── AVL Output Parser ─────────────────────────────────────
 
 def _parse_output(output: str) -> Dict[str, Any]:
     results: Dict[str, Any] = {"raw": output}
 
-    # All the keys we want to extract via regex
-    # Format: "label in file" -> "key in results"
-    # AVL st output has lines like:  CLtot =   0.12345   CDtot =   0.00123
-    # Some lines have two values on one line, some have one.
-
-    # ── Total force/moment coefficients ──
     scalar_keys = {
-        "CLtot": "CLtot",
-        "CDtot": "CDtot",
-        "CDvis": "CDvis",
-        "CDind": "CDind",
-        "CYtot": "CYtot",
-        "Cltot": "Cltot",
-        "Cmtot": "Cmtot",
-        "Cntot": "Cntot",
-        "CLff":  "CLff",
-        "CDff":  "CDff",
-        "CYff":  "CYff",
-        "e":     "e_oswald",
+        "CLtot": "CLtot", "CDtot": "CDtot", "CDvis": "CDvis", "CDind": "CDind",
+        "CYtot": "CYtot", "Cltot": "Cltot", "Cmtot": "Cmtot", "Cntot": "Cntot",
+        "CLff":  "CLff",  "CDff":  "CDff",  "CYff":  "CYff",  "e":     "e_oswald",
     }
 
-    # ── Stability derivatives ──
     deriv_keys = {
         # Alpha derivatives
-        "CLa":  "CLa",
-        "CYa":  "CYa",
-        "Cla":  "Cla",
-        "Cma":  "Cma",
-        "Cna":  "Cna",
+        "CLa": "CLa", "CYa": "CYa", "Cla": "Cla", "Cma": "Cma", "Cna": "Cna",
         # Beta derivatives
-        "CLb":  "CLb",
-        "CYb":  "CYb",
-        "Clb":  "Clb",
-        "Cmb":  "Cmb",
-        "Cnb":  "Cnb",
+        "CLb": "CLb", "CYb": "CYb", "Clb": "Clb", "Cmb": "Cmb", "Cnb": "Cnb",
         # Roll rate (p) derivatives
-        "CLp":  "CLp",
-        "CYp":  "CYp",
-        "Clp":  "Clp",
-        "Cnp":  "Cnp",
+        "CLp": "CLp", "CYp": "CYp", "Clp": "Clp", "Cnp": "Cnp",
         # Pitch rate (q) derivatives
-        "CLq":  "CLq",
-        "Cmq":  "Cmq",
+        "CLq": "CLq", "Cmq": "Cmq",
         # Yaw rate (r) derivatives
-        "CYr":  "CYr",
-        "Clr":  "Clr",
-        "Cnr":  "Cnr",
+        "CYr": "CYr", "Clr": "Clr", "Cnr": "Cnr",
         # Alpha-dot derivatives
-        "CLad": "CLad",
-        "Cmad": "Cmad",
+        "CLad": "CLad", "Cmad": "Cmad",
     }
+
+    # Control derivatives: will be populated dynamically
+    ctrl_derivs = {}
 
     all_keys = {}
     all_keys.update(scalar_keys)
@@ -430,18 +391,17 @@ def _parse_output(output: str) -> Dict[str, Any]:
     for key in all_keys.values():
         results[key] = None
 
-    # Also extract Xnp, alpha, static margin
     results["Xnp"] = None
     results["alpha"] = None
     results["static_margin"] = None
+    results["spiral_stability"] = None
+    results["control_derivs"] = {}
 
     for line in output.splitlines():
-        # Extract all "Key = Value" pairs on the line
         for file_label, res_key in all_keys.items():
-            # Use word boundary to avoid partial matches (e.g. CLad vs CLa)
             pattern = r'\b' + re.escape(file_label) + r'\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)'
             m = re.search(pattern, line)
-            if m and results[res_key] is None:
+            if m and results.get(res_key) is None:
                 try:
                     results[res_key] = float(m.group(1))
                 except ValueError:
@@ -459,17 +419,132 @@ def _parse_output(output: str) -> Dict[str, Any]:
             if m:
                 results["alpha"] = float(m.group(1))
 
-    # Compute static margin if we have Xnp
-    # (Xnp - Xref) / Cref  ... but we don't have Xref here, just provide Xnp
-    # The frontend can compute static margin from parsed model data
+        # Spiral stability: Clb*Cnr/Clr*Cnb
+        if "spirally stable" in line.lower() or "Clb Cnr / Clr Cnb" in line:
+            m = re.search(r'([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*\(', line)
+            if m:
+                results["spiral_stability"] = float(m.group(1))
 
-    # Convenience aliases for frontend
+        # Control derivatives (e.g. "CLd1 =  0.012345")
+        m_ctrl = re.findall(r'([A-Za-z]{2,3}d\d)\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)', line)
+        for label, val in m_ctrl:
+            try:
+                results["control_derivs"][label] = float(val)
+            except ValueError:
+                pass
+
     results["CL"] = results["CLtot"]
     results["CD"] = results["CDtot"]
     results["Cm"] = results["Cmtot"]
     results["Cma"] = results.get("Cma")
 
     return results
+
+
+# ── AVL Runner ───────────────────────────────────────────
+
+def _build_run_commands(model_filename: str, req_alpha: float, req_beta: float,
+                         trim_mode: str, controls: Dict, controls_list: List,
+                         st_filename: str, fs_filename: str, hm_filename: str) -> str:
+    cmds = [f"load {model_filename}", "oper"]
+
+    if trim_mode == "alpha":
+        cmds.extend(["a", "pm", "0"])
+    else:
+        cmds.append(f"a a {req_alpha}")
+
+    cmds.append(f"b b {req_beta}")
+
+    for ctrl_name, val in controls.items():
+        if ctrl_name in controls_list:
+            idx = controls_list.index(ctrl_name) + 1
+            cmds.extend([f"d{idx}", f"d{idx}", str(val)])
+
+    cmds.extend([
+        "x",           # execute
+        "st",          # stability derivatives
+        st_filename,
+        "fs",          # strip forces
+        fs_filename,
+        "hm",          # hinge moments
+        hm_filename,
+        "",
+        "",
+        "quit",
+    ])
+    return "\n".join(cmds) + "\n"
+
+
+def _run_avl_full(content: str, alpha: float, beta: float, trim_mode: str,
+                  controls: Dict, xref_override: Optional[float] = None) -> Dict:
+    """Run AVL and return full results including strip forces and hinge moments."""
+    work_dir = AVL_EXAMPLES_DIR
+    req_id = str(uuid.uuid4())[:8]
+    model_filename = f"_gui_model_{req_id}.avl"
+    st_filename    = f"_gui_st_{req_id}.txt"
+    fs_filename    = f"_gui_fs_{req_id}.txt"
+    hm_filename    = f"_gui_hm_{req_id}.txt"
+    model_path = os.path.join(work_dir, model_filename)
+    st_path    = os.path.join(work_dir, st_filename)
+    fs_path    = os.path.join(work_dir, fs_filename)
+    hm_path    = os.path.join(work_dir, hm_filename)
+
+    if xref_override is not None:
+        content = override_xref(content, xref_override)
+
+    try:
+        with open(model_path, "w") as f:
+            f.write(content)
+
+        parsed = parse_avl_file(content)
+        controls_list = parsed.get("controls", [])
+
+        cmd = _build_run_commands(
+            model_filename, alpha, beta, trim_mode, controls, controls_list,
+            st_filename, fs_filename, hm_filename
+        )
+
+        max_attempts = 10
+        proc = None
+        for attempt in range(1, max_attempts + 1):
+            proc = subprocess.run(
+                [AVL_BIN], input=cmd, text=True,
+                cwd=work_dir, capture_output=True, timeout=30,
+            )
+            if proc.returncode == 0:
+                break
+            elif proc.returncode in (-6, 134) or "syscall to map cache" in proc.stderr:
+                time.sleep(0.05)
+            else:
+                break
+
+        # Parse all outputs
+        result = {}
+        if os.path.exists(st_path):
+            with open(st_path) as f:
+                result = _parse_output(f.read())
+        elif proc:
+            result = _parse_output(proc.stdout)
+
+        result["strips"] = []
+        if os.path.exists(fs_path):
+            with open(fs_path) as f:
+                result["strips"] = _parse_strip_forces(f.read())
+
+        result["hinge_moments"] = []
+        if os.path.exists(hm_path):
+            with open(hm_path) as f:
+                result["hinge_moments"] = _parse_hinge_moments(f.read())
+
+        return result
+
+    finally:
+        for p in [model_path, st_path, fs_path, hm_path]:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
 
 # ── Endpoints ─────────────────────────────────────────────
@@ -481,7 +556,6 @@ def ping():
 
 @app.get("/api/models")
 def list_models():
-    """List all .avl files in the examples directory."""
     if not os.path.isdir(AVL_EXAMPLES_DIR):
         raise HTTPException(status_code=404, detail="AVL examples directory not found")
     files = []
@@ -493,7 +567,6 @@ def list_models():
 
 @app.get("/api/load")
 def load_default():
-    """Load and parse the default vanilla.avl file."""
     default_file = os.path.join(AVL_EXAMPLES_DIR, "vanilla.avl")
     if not os.path.isfile(default_file):
         raise HTTPException(status_code=404, detail="Default AVL file not found")
@@ -504,7 +577,9 @@ def load_default():
 
 @app.get("/api/load/{filename}")
 def load_model(filename: str):
-    """Load and parse any .avl file from the examples directory."""
+    # Only plain .avl file names from the examples folder (no paths).
+    if filename != os.path.basename(filename) or not filename.lower().endswith('.avl'):
+        raise HTTPException(status_code=400, detail="Invalid file name")
     filepath = os.path.join(AVL_EXAMPLES_DIR, filename)
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail=f"File {filename} not found")
@@ -515,15 +590,12 @@ def load_model(filename: str):
 
 @app.post("/api/upload")
 async def upload_model(file: UploadFile = File(...)):
-    """Upload a custom .avl file."""
     if not file.filename.lower().endswith('.avl'):
         raise HTTPException(status_code=400, detail="Only .avl files are accepted")
     content = (await file.read()).decode('utf-8', errors='replace')
-    # Save to examples dir
-    dest = os.path.join(AVL_EXAMPLES_DIR, file.filename)
-    with open(dest, 'w') as f:
-        f.write(content)
-    return {"filename": file.filename, "content": content, "parsed": parse_avl_file(content)}
+    # Not saved to disk: on a shared server one user's upload must not
+    # overwrite the examples or show up in everyone's model list.
+    return {"filename": os.path.basename(file.filename), "content": content, "parsed": parse_avl_file(content)}
 
 
 @app.post("/api/run")
@@ -531,97 +603,102 @@ def run_avl(req: RunRequest):
     if not os.path.isdir(AVL_EXAMPLES_DIR):
         raise HTTPException(status_code=400, detail="AVL examples directory missing")
     try:
-        raw = _run_avl(req)
-        return _parse_output(raw)
+        return _run_avl_full(
+            req.avl_content, req.alpha, req.beta,
+            req.trim_mode, req.controls, req.xref_override
+        )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="AVL timed out")
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="AVL binary not found")
     except Exception as e:
-        import traceback
-        with open("/Users/ibrokhim/.gemini/antigravity-ide/scratch/backend_errors.log", "a") as logf:
-            traceback.print_exc(file=logf)
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/run-cases")
+def run_multi_cases(req: MultiCaseRequest):
+    """Run multiple flight cases and return comparison results."""
+    if not os.path.isdir(AVL_EXAMPLES_DIR):
+        raise HTTPException(status_code=400, detail="AVL examples directory missing")
+    if len(req.cases) > 10:
+        raise HTTPException(status_code=400, detail="Max 10 cases at once")
+    try:
+        results = []
+        for case in req.cases:
+            r = _run_avl_full(
+                req.avl_content, case.alpha, case.beta,
+                case.trim_mode, case.controls, req.xref_override
+            )
+            r["label"] = case.label
+            r["alpha_input"] = case.alpha
+            results.append(r)
+        return {"cases": results}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/run-polar")
 def run_polar(req: PolarRequest):
     if not os.path.isdir(AVL_EXAMPLES_DIR):
         raise HTTPException(status_code=400, detail="AVL examples directory missing")
-        
+
     work_dir = AVL_EXAMPLES_DIR
-    import uuid
     req_id = str(uuid.uuid4())[:8]
     model_filename = f"_gui_model_{req_id}.avl"
     model_path = os.path.join(work_dir, model_filename)
-    
     st_files = []
-    
+
     try:
         alpha_start = req.alpha_start
         alpha_end = req.alpha_end
         alpha_step = req.alpha_step
-        
         if alpha_step <= 0:
             alpha_step = 1.0
         if alpha_start > alpha_end:
             alpha_start, alpha_end = alpha_end, alpha_start
-            
+
         alphas = []
         curr = alpha_start
         while curr <= alpha_end + 1e-5:
             alphas.append(round(curr, 2))
             curr += alpha_step
-            
         if len(alphas) > 50:
             alphas = alphas[:50]
-            
+
         content = req.avl_content
         if req.xref_override is not None:
             content = override_xref(content, req.xref_override)
-            
+
         with open(model_path, "w") as f:
             f.write(content)
-            
+
         parsed = parse_avl_file(content)
         controls_list = parsed.get("controls", [])
-        
+
         cmds = [f"load {model_filename}", "oper"]
-        
-        # Set Beta and control deflections once (constant in this oper session)
         cmds.append("b b 0.0")
         for ctrl_name, val in req.controls.items():
             if ctrl_name in controls_list:
                 idx = controls_list.index(ctrl_name) + 1
                 cmds.extend([f"d{idx}", f"d{idx}", str(val)])
-                
+
         for i, a in enumerate(alphas):
             st_filename = f"_gui_st_{req_id}_{i}.txt"
             st_path = os.path.join(work_dir, st_filename)
             st_files.append((a, st_filename, st_path))
-            
-            cmds.extend([
-                f"a a {a}",
-                "x",
-                "st",
-                st_filename,
-            ])
-            
+            cmds.extend([f"a a {a}", "x", "st", st_filename])
+
         cmds.extend(["", "quit"])
         cmd = "\n".join(cmds) + "\n"
-        with open("/Users/ibrokhim/.gemini/antigravity-ide/scratch/backend_command.txt", "w") as cmdf:
-            cmdf.write(cmd)
-        
-        # Run with retry logic
+
         max_attempts = 10
         proc = None
         for attempt in range(1, max_attempts + 1):
             proc = subprocess.run(
-                [AVL_BIN],
-                input=cmd,
-                text=True,
-                cwd=work_dir,
-                capture_output=True,
-                timeout=45,
+                [AVL_BIN], input=cmd, text=True,
+                cwd=work_dir, capture_output=True, timeout=60,
             )
             if proc.returncode == 0:
                 break
@@ -629,10 +706,7 @@ def run_polar(req: PolarRequest):
                 time.sleep(0.05)
             else:
                 break
-                
-        if proc and proc.returncode != 0:
-            raise Exception(f"AVL process failed with exit code {proc.returncode}. Stderr: {proc.stderr}")
-            
+
         data_points = []
         for a, st_filename, st_path in st_files:
             if os.path.exists(st_path):
@@ -645,14 +719,14 @@ def run_polar(req: PolarRequest):
                         "CL": parsed_st.get("CLtot"),
                         "CD": parsed_st.get("CDtot"),
                         "Cm": parsed_st.get("Cmtot"),
+                        "Xnp": parsed_st.get("Xnp"),
+                        "e": parsed_st.get("e_oswald"),
                     })
-                    
-        return {"data": data_points, "raw": f"Polar sweep calculated successfully for {len(data_points)} points."}
-        
+
+        return {"data": data_points, "raw": f"Polar sweep: {len(data_points)} points."}
+
     except Exception as e:
-        import traceback
-        with open("/Users/ibrokhim/.gemini/antigravity-ide/scratch/backend_errors.log", "a") as logf:
-            traceback.print_exc(file=logf)
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if os.path.exists(model_path):
