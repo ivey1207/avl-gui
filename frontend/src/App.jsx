@@ -2,11 +2,9 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
 import './App.css';
 import Airplane3D from './Airplane3D';
+import { apiFetch } from './api';
 
-// Same-origin by default: nginx on the server and the Vite proxy locally route /api to the backend.
-const API = import.meta.env.VITE_API_URL ?? '';
-
-function App() {
+function App({ user, onLogout }) {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [avlContent, setAvlContent] = useState('');
@@ -37,7 +35,7 @@ function App() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch(`${API}/api/models`);
+      const res = await apiFetch(`/api/models`);
       if (!res.ok) throw new Error('Failed to fetch models');
       const data = await res.json();
       setModels(data.models || []);
@@ -47,7 +45,7 @@ function App() {
   const loadModel = async (filename) => {
     try {
       setLoading(true); setLoadingMsg('Loading model…'); setError(''); setResults(null);
-      const res = await fetch(`${API}/api/load/${encodeURIComponent(filename)}`);
+      const res = await apiFetch(`/api/load/${encodeURIComponent(filename)}`);
       if (!res.ok) throw new Error('Failed to load model');
       const data = await res.json();
       setAvlContent(data.content); setParsed(data.parsed); setSelectedModel(filename);
@@ -62,7 +60,7 @@ function App() {
     try {
       setLoading(true); setLoadingMsg('Uploading…'); setError(''); setResults(null);
       const fd = new FormData(); fd.append('file', file);
-      const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+      const res = await apiFetch(`/api/upload`, { method: 'POST', body: fd });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'Upload failed'); }
       const data = await res.json();
       setAvlContent(data.content); setParsed(data.parsed); setSelectedModel(data.filename);
@@ -78,7 +76,7 @@ function App() {
     setLoadingMsg(trim === 'alpha' ? 'Trimming aircraft…' : 'Running AVL analysis…');
     setError(null);
     try {
-      const response = await fetch(`${API}/api/run`, {
+      const response = await apiFetch(`/api/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -128,7 +126,7 @@ function App() {
     requestInProgress.current = true;
     try {
       setLoading(true); setLoadingMsg('Calculating polar sweep…');
-      const res = await fetch(`${API}/api/run-polar`, {
+      const res = await apiFetch(`/api/run-polar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -405,6 +403,11 @@ function App() {
             📁 Upload .avl
             <input type="file" accept=".avl" onChange={handleFileUpload} hidden />
           </label>
+          <div className="user-chip" title={`Signed in as ${user}`}>
+            <span className="user-avatar">{user.charAt(0).toUpperCase()}</span>
+            <span className="user-name">{user}</span>
+          </div>
+          <button type="button" className="btn-logout" onClick={onLogout}>Log out</button>
         </div>
       </header>
 

@@ -132,6 +132,21 @@ ssh-copy-id root@SERVER_IP        # once / один раз
 Files / Файлы: `deploy/setup-server.sh` (runs on the server), `deploy/avl-gui.service`, `deploy/nginx-avl-gui.conf`.
 Logs / Логи: `ssh root@SERVER_IP journalctl -u avl-gui -f`
 
+### 5. Accounts / Учётные записи
+
+The site requires a login; there is no self sign-up. Accounts are stored on the server in `/var/lib/avl-gui` (deploys never touch it).
+Вход обязателен, самостоятельной регистрации нет. Учётки хранятся на сервере в `/var/lib/avl-gui` (деплой их не трогает).
+
+```bash
+ssh -t root@SERVER_IP avl-users add ivan      # create, asks for the password / создать, спросит пароль
+ssh -t root@SERVER_IP avl-users passwd ivan   # change password (logs out everywhere) / сменить пароль
+ssh -t root@SERVER_IP avl-users remove ivan   # delete account / удалить
+ssh root@SERVER_IP avl-users list
+```
+
+Locally the same script works from `backend/`: `venv/bin/python manage_users.py add <name>` (stored in `backend/data/`, ignored by git).
+Sessions last 7 days. Once the site has HTTPS, add `Environment=AVL_COOKIE_SECURE=1` to `deploy/avl-gui.service`.
+
 ---
 
 ## Features & Aerodynamic Analysis / Возможности и Аэродинамический Анализ

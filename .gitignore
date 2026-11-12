@@ -50,3 +50,6 @@ _gui_*
 *.sln
 *.sw?
 
+
+# Accounts and session key (created at runtime)
+backend/data/

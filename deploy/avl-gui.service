@@ -8,6 +8,7 @@ Group=avl
 WorkingDirectory=/opt/avl-gui/backend
 Environment=AVL_BIN=/usr/local/bin/avl
 Environment=AVL_EXAMPLES_DIR=/opt/avl-gui/examples
+Environment=AVL_DATA_DIR=/var/lib/avl-gui
 ExecStart=/opt/avl-gui/backend/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=always
 RestartSec=3

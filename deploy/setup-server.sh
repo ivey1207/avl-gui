@@ -24,6 +24,20 @@ echo "==> Service user"
 id avl >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin avl
 chown -R avl:avl "$APP/examples"
 
+echo "==> Accounts (kept outside the app folder so deploys never touch them)"
+install -d -o avl -g avl -m 700 /var/lib/avl-gui
+if [ ! -s /var/lib/avl-gui/secret.key ]; then
+  (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > /var/lib/avl-gui/secret.key)
+  chown avl:avl /var/lib/avl-gui/secret.key
+fi
+cat > /usr/local/bin/avl-users <<'EOF'
+#!/bin/sh
+# Manage AVL GUI accounts: avl-users add|passwd|remove <name>, avl-users list
+cd /opt/avl-gui/backend && exec sudo -u avl env AVL_DATA_DIR=/var/lib/avl-gui \
+  /opt/avl-gui/backend/venv/bin/python manage_users.py "$@"
+EOF
+chmod 755 /usr/local/bin/avl-users
+
 echo "==> Python backend"
 [ -x backend/venv/bin/python ] || python3 -m venv backend/venv
 backend/venv/bin/pip install -q --upgrade pip

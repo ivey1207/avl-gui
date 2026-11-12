@@ -16,7 +16,7 @@ rsync -az --delete \
   --exclude '.git/' --exclude '.claude/' --exclude '.DS_Store' \
   --exclude 'node_modules/' --exclude 'venv/' --exclude '__pycache__/' \
   --exclude '*.o' --exclude '*.a' --exclude '/avl/bin/avl' --exclude '/avl/plotlib/config.make' \
-  --exclude '/examples/_gui_*' \
+  --exclude '/examples/_gui_*' --exclude '/backend/data/' \
   ./ "$HOST:$APP/"
 
 echo "==> Setting up server"

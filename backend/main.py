@@ -6,9 +6,11 @@ import uuid
 import time
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+import auth
 
 # ── Configuration ─────────────────────────────────────────
 # Override with env vars AVL_BIN / AVL_EXAMPLES_DIR if needed.
@@ -16,15 +18,56 @@ AVL_BIN = os.environ.get("AVL_BIN") or shutil.which("avl") or "/opt/homebrew/bin
 AVL_EXAMPLES_DIR = os.environ.get("AVL_EXAMPLES_DIR") or os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples"))
 
+# Set AVL_COOKIE_SECURE=1 once the site is served over HTTPS.
+COOKIE_SECURE = os.environ.get("AVL_COOKIE_SECURE") == "1"
+
+# The frontend is served from the same origin (nginx / Vite proxy), so no CORS is needed.
 app = FastAPI(title="AVL GUI Backend")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ── Login ─────────────────────────────────────────────────
+# Everything except these paths requires a valid session cookie.
+PUBLIC_PATHS = {"/api/ping", "/api/login", "/api/logout", "/api/me"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if request.url.path not in PUBLIC_PATHS:
+        if not auth.verify_token(request.cookies.get(auth.COOKIE_NAME)):
+            return JSONResponse({"detail": "Not logged in"}, status_code=401)
+    return await call_next(request)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=256)
+
+
+@app.post("/api/login")
+def login(req: LoginRequest, response: Response):
+    username = req.username.strip()
+    if not auth.authenticate(username, req.password):
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    response.set_cookie(
+        auth.COOKIE_NAME, auth.make_token(username),
+        max_age=auth.SESSION_TTL, httponly=True, samesite="strict",
+        secure=COOKIE_SECURE, path="/",
+    )
+    return {"username": username}
+
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/me")
+def me(request: Request):
+    username = auth.verify_token(request.cookies.get(auth.COOKIE_NAME))
+    if not username:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return {"username": username}
+
 
 # ── Models ────────────────────────────────────────────────
 
